@@ -36,14 +36,14 @@ const (
 
 type Crypto interface {
 	GetUUID(name string) (uuid.UUID, error)
-	GenerateKey(name string, id uuid.UUID) error
-	GetCSR(name string) ([]byte, error)
-	GetPublicKey(name string) ([]byte, error)
-	SetPublicKey(name string, id uuid.UUID, pubKeyBytes []byte) error
-	SetKey(name string, id uuid.UUID, privKeyBytes []byte) error
+	GenerateKey(name string, id uuid.UUID, kek []byte) error
+	GetCSR(name string, kek []byte) ([]byte, error)
+	GetPublicKey(name string, kek []byte) ([]byte, error)
+	SetPublicKey(name string, id uuid.UUID, pubKeyBytes []byte, kek []byte) error
+	SetKey(name string, id uuid.UUID, privKeyBytes []byte, kek []byte) error
 
-	Sign(id uuid.UUID, value []byte) ([]byte, error)
-	Verify(id uuid.UUID, value []byte, signature []byte) (bool, error)
+	Sign(id uuid.UUID, value []byte, kek []byte) ([]byte, error)
+	Verify(id uuid.UUID, value []byte, signature []byte, kek []byte) (bool, error)
 }
 
 type Protocol struct {

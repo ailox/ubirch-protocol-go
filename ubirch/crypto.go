@@ -33,12 +33,15 @@ import (
 	"github.com/paypal/go.crypto/keystore"
 )
 
-// This crypto context contains the key store, a mapping for names -> UUIDs
+// CryptoContext contains the key store, a mapping for names -> UUIDs
 // and the last generated signature per UUID.
 type CryptoContext struct {
 	Keystore *keystore.Keystore
 	Names    map[string]uuid.UUID
 }
+
+// Ensure CryptoContext implements the Crypto interface
+var _ Crypto = (*CryptoContext)(nil)
 
 func encodePrivateKey(privateKey *ecdsa.PrivateKey) ([]byte, error) {
 	x509Encoded, err := x509.MarshalECPrivateKey(privateKey)
@@ -90,7 +93,7 @@ func decodePublicKey(pemEncoded []byte) (*ecdsa.PublicKey, error) {
 //	return r, s, nil
 //}
 
-func (c *CryptoContext) storePublicKey(name string, id uuid.UUID, k *ecdsa.PublicKey) error {
+func (c *CryptoContext) storePublicKey(name string, id uuid.UUID, k *ecdsa.PublicKey, kek []byte) error {
 	if c.Names == nil {
 		c.Names = make(map[string]uuid.UUID, 1)
 	}
@@ -100,12 +103,11 @@ func (c *CryptoContext) storePublicKey(name string, id uuid.UUID, k *ecdsa.Publi
 	if err != nil {
 		return err
 	}
-	pph, _ := id.MarshalBinary()
-	return c.Keystore.Set("_"+id.String(), pubKeyBytes, pph)
+	return c.Keystore.Set("_"+id.String(), pubKeyBytes, kek)
 }
 
 // storePrivateKey stores the private Key, returns 'nil', if successful
-func (c *CryptoContext) storePrivateKey(name string, id uuid.UUID, k *ecdsa.PrivateKey) error {
+func (c *CryptoContext) storePrivateKey(name string, id uuid.UUID, k *ecdsa.PrivateKey, kek []byte) error {
 	if c.Names == nil {
 		c.Names = make(map[string]uuid.UUID, 1)
 	}
@@ -115,16 +117,16 @@ func (c *CryptoContext) storePrivateKey(name string, id uuid.UUID, k *ecdsa.Priv
 	if err != nil {
 		return err
 	}
-	pph, _ := id.MarshalBinary()
-	return c.Keystore.Set(id.String(), privKeyBytes, pph)
+
+	return c.Keystore.Set(id.String(), privKeyBytes, kek)
 }
 
-func (c *CryptoContext) storeKey(name string, id uuid.UUID, k *ecdsa.PrivateKey) error {
-	err := c.storePublicKey(name, id, &k.PublicKey)
+func (c *CryptoContext) storeKey(name string, id uuid.UUID, k *ecdsa.PrivateKey, kek []byte) error {
+	err := c.storePublicKey(name, id, &k.PublicKey, kek)
 	if err != nil {
 		return err
 	}
-	return c.storePrivateKey(name, id, k)
+	return c.storePrivateKey(name, id, k, kek)
 }
 
 // Get the uuid that is related the given name.
@@ -137,16 +139,16 @@ func (c *CryptoContext) GetUUID(name string) (uuid.UUID, error) {
 }
 
 // Generate a new key pair and store it using the given name and associated UUID.
-func (c *CryptoContext) GenerateKey(name string, id uuid.UUID) error {
+func (c *CryptoContext) GenerateKey(name string, id uuid.UUID, kek []byte) error {
 	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return err
 	}
-	return c.storeKey(name, id, k)
+	return c.storeKey(name, id, k, kek)
 }
 
 //SetPublicKey sets the public key (64 bytes)
-func (c *CryptoContext) SetPublicKey(name string, id uuid.UUID, pubKeyBytes []byte) error {
+func (c *CryptoContext) SetPublicKey(name string, id uuid.UUID, pubKeyBytes, kek []byte) error {
 	const expectedKeyLength = 64
 	if len(pubKeyBytes) != expectedKeyLength {
 		return errors.New(fmt.Sprintf("public key length wrong: %d != %d", len(pubKeyBytes), expectedKeyLength))
@@ -159,11 +161,11 @@ func (c *CryptoContext) SetPublicKey(name string, id uuid.UUID, pubKeyBytes []by
 	pubKey.Y = &big.Int{}
 	pubKey.Y.SetBytes(pubKeyBytes[32:64])
 
-	return c.storePublicKey(name, id, pubKey)
+	return c.storePublicKey(name, id, pubKey, kek)
 }
 
 //SetKey takes a private key (32 bytes), calculates the public key and sets both private and public key
-func (c *CryptoContext) SetKey(name string, id uuid.UUID, privKeyBytes []byte) error {
+func (c *CryptoContext) SetKey(name string, id uuid.UUID, privKeyBytes, kek []byte) error {
 	const expectedKeyLength = 32
 	if len(privKeyBytes) != expectedKeyLength {
 		return errors.New(fmt.Sprintf("private key lenght wrong: %d != %d", len(privKeyBytes), expectedKeyLength))
@@ -175,21 +177,20 @@ func (c *CryptoContext) SetKey(name string, id uuid.UUID, privKeyBytes []byte) e
 	privKey.PublicKey.Curve = elliptic.P256()
 	privKey.PublicKey.X, privKey.PublicKey.Y = privKey.PublicKey.Curve.ScalarBaseMult(privKey.D.Bytes())
 
-	return c.storeKey(name, id, privKey)
+	return c.storeKey(name, id, privKey, kek)
 }
 
 // Get a certificate signing request.
-func (c *CryptoContext) GetCSR(name string) ([]byte, error) { return nil, nil }
+func (c *CryptoContext) GetCSR(name string, kek []byte) ([]byte, error) { return nil, nil }
 
 // Get the public key bytes for the given name.
-func (c *CryptoContext) GetPublicKey(name string) ([]byte, error) {
+func (c *CryptoContext) GetPublicKey(name string, kek []byte) ([]byte, error) {
 	id, err := c.GetUUID(name)
 	if err != nil {
 		return nil, err
 	}
 
-	pph, _ := id.MarshalBinary()
-	pubKeyBytes, err := c.Keystore.Get("_"+id.String(), pph)
+	pubKeyBytes, err := c.Keystore.Get("_"+id.String(), kek)
 	if err != nil {
 		return nil, err
 	}
@@ -197,9 +198,8 @@ func (c *CryptoContext) GetPublicKey(name string) ([]byte, error) {
 }
 
 // Sign a message using a specific UUID. Need to get the UUID via CryptoContext#GetUUID().
-func (c *CryptoContext) Sign(id uuid.UUID, data []byte) ([]byte, error) {
-	pph, _ := id.MarshalBinary()
-	privKeyBytes, err := c.Keystore.Get(id.String(), pph)
+func (c *CryptoContext) Sign(id uuid.UUID, data, kek []byte) ([]byte, error) {
+	privKeyBytes, err := c.Keystore.Get(id.String(), kek)
 	if err != nil {
 		return nil, err
 	}
@@ -226,9 +226,8 @@ func (c *CryptoContext) Sign(id uuid.UUID, data []byte) ([]byte, error) {
 }
 
 // Verify a message using a specific UUID. Need to get the UUID via CryptoContext#GetUUID().
-func (c *CryptoContext) Verify(id uuid.UUID, data []byte, signature []byte) (bool, error) {
-	pph, _ := id.MarshalBinary()
-	pubKeyBytes, err := c.Keystore.Get("_"+id.String(), pph)
+func (c *CryptoContext) Verify(id uuid.UUID, data, signature, kek []byte) (bool, error) {
+	pubKeyBytes, err := c.Keystore.Get("_"+id.String(), kek)
 	if err != nil {
 		return false, err
 	}
